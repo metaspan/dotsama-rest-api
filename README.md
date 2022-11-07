@@ -11,6 +11,10 @@ npm install
 node server.js
 ```
 
+# TODO
+
+- insert table of GET/POST calls
+
 # other solutions
 
 - https://github.com/paritytech/substrate-api-sidecar
