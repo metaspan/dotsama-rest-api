@@ -1,13 +1,36 @@
 
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import { hexToString } from '@polkadot/util'
+import { DockAPI } from '@docknetwork/sdk'
 import { parseIdentity } from './utils.js';
+import { ApiHandler } from './lib/ApiHandler.js';
 import express from 'express';
 const port = 3000;
 
+// collect usage stats into prometheus
+const metrics = true
+var counters = { kusama: {}, polkadot: {}, dock: {} }
+function count(chain, fn) {
+  console.debug('count()', chain, fn)
+  if (!metrics) return
+  if (counters[chain][fn]) { counters[chain][fn]++ } else { counters[chain][fn] = 1 }
+}
+// import client from 'prom-client';
+// new client.Counter({
+//   name: 'metric_name',
+//   help: 'metric_help',
+//   async collect () {
+//     this.set(counters)
+//   }
+// });
+// counter.inc(); // Increment by 1
+// counter.inc(10); // Increment by 10
+
 const wsUrl = {
-  polkadot: 'ws://localhost:30325',
+  //polkadot: 'ws://localhost:30325',
+  polkadot: 'wss://rpc.ibp.network/polkadot',
   kusama: 'ws://localhost:40425',
+  dock: 'wss://mainnet-node.dock.io',
 };
 
 async function asyncForEach(array, callback) {
@@ -18,13 +41,25 @@ async function asyncForEach(array, callback) {
 
 (async () => {
 
-  const wsProviderKusama = new WsProvider(wsUrl.kusama);
-  const wsProviderPolkadot = new WsProvider(wsUrl.polkadot);
-  const kapi = await ApiPromise.create({ provider: wsProviderKusama })
-  const papi = await ApiPromise.create({ provider: wsProviderPolkadot })
+  const wsProviderKusama = new WsProvider(wsUrl.kusama)
+  const wsProviderPolkadot = new WsProvider(wsUrl.polkadot)
+  const kapi = await ApiPromise.create({ provider: wsProviderKusama, noInitWarn: true, throwOnConnect: false })
+  const papi = await ApiPromise.create({ provider: wsProviderPolkadot, noInitWarn: true, throwOnConnect: false })
+  const dock = new DockAPI()
+  const dapi = await dock.init({ address: wsUrl.dock })
   const api = {
     kusama: kapi,
-    polkadot: papi
+    polkadot: papi,
+    dock: dapi
+  }
+
+  const kusamaHandler = new ApiHandler(wsUrl.kusama)
+  const polkadotHandler = new ApiHandler(wsUrl.polkadot)
+  const dockHandler = new ApiHandler(wsUrl.dock)
+  const handlers = {
+    kusama: kusamaHandler,
+    polkadot: polkadotHandler,
+    dock: dockHandler
   }
 
   const app = express()
@@ -44,38 +79,76 @@ async function asyncForEach(array, callback) {
     res.send('hello from dotsama rest api')
   })
 
-  //           api.query.staking.currentEra()
-  app.get('/:chain/query/staking/currentEra', async (req, res, next) => {
+  // prometheus metrics
+  app.get('/:chain/metrics', (req, res) => {
+    const chain = req.params.chain
+    const PREFIX = `dotsama_rest_api`
+    var items = []  
+    Object.keys(counters[chain]).forEach((key) => {
+      // items.push(`${PREFIX}_updated_at{stash="${stash}"} ${this.updatedAt.valueOf()}`)
+      items.push(`${PREFIX}_count{chain="${chain}", function="${key}"} ${counters[chain][key]}`)
+    })
+    const result = items.join("\n")
+    counters[chain] = {}
+    res.header({'content-type':'text/plain; charset=utf-8'})
+      .send(result)
+  })
+
+  //            api.registry
+  app.get('/:chain/registry/getChainProperties', async(req, res, next) => {
+    const chain = req.params.chain
+    count(chain, '/registry/getChainProperties')
+    console.debug(chain, '/api/registry/getChainProperties')
     try {
-      const chain = req.params.chain
-      const currentEra = await api[chain].query.staking.currentEra()
-      res.json({ currentEra })
+      // const chain = req.params.chain
+      const chainProperties = await api[chain].registry.getChainProperties()
+      res.json({ chainProperties })
     } catch (err) { next(err) }
   })
 
   //            api.derive.staking.accounts(ids)
   app.post('/:chain/derive/staking/accounts', async(req, res, next) => {
+    const chain = req.params.chain
+    count(chain, '/derive/staking/accounts')
+    console.debug(chain, '/derive/staking/accounts')
     try {
-      const chain = req.params.chain
+      // const chain = req.params.chain
       const ids = req.body?.ids || []
       const accounts = await api[chain].derive.staking.accounts(ids)
       res.json({ accounts })
     } catch (err) { next(err) }
   })
 
-  //           api.rpc.system.properties
-  app.get('/:chain/rpc/system/properties', async(req, res, next) => {
-    try {
-      const chain = req.params.chain
-      const props = await api[chain].rpc.system.properties()
-      res.json(props)
-    } catch (err) { next(err) }
+  //           api.query.balances
+  app.get('/:chain/query/balances/:method', async (req, res) => {
+    let { chain, method } = req.params
+    count(chain, `/query/balances/${method}`)
+    let params = req.query
+    let answer = await handlers[chain].balances(method, params)
+    res.json(answer)
+  })
+
+  //           api.query.convictionVoting
+  app.get('/:chain/query/convictionVoting/:method', async (req, res) => {
+    let { chain, method } = req.params
+    let params = req.query
+    let answer = await handlers[chain].convictionVoting(method, params)
+    res.json(answer)
+  })
+
+  //           api.query.democracy
+  app.get('/:chain/query/democracy/:method', async (req, res) => {
+    let { chain, method } = req.params
+    let params = req.query
+    let answer = await handlers[chain].democracy(method, params)
+    res.json(answer)
   })
 
   //            api.query.identity.identityOf.multi(ids)
   app.post('/:chain/query/identity/identityOf', async(req, res, next) => {
     try {
       const chain = req.params.chain
+      count(chain, '/query/identity/identityOf')
       const id = req.body?.id || null
       const ids = req.body?.ids || []
       if (id) {
@@ -88,80 +161,29 @@ async function asyncForEach(array, callback) {
     } catch (err) { next(err) }
   })
 
-  //           api.query.nominationPools.lastPoolId()
-  app.get('/:chain/query/nominationPools/lastPoolId', async (req, res, next) => {
-    try {
-      const chain = req.params.chain
-      var lastId = await api[chain].query.nominationPools.lastPoolId()
-      res.json({ lastPoolId: lastId.toNumber() })
-    } catch (err) { next(err) }
-  })
-  //           api.query.nominationPools.bondedPools(pid)
-  app.get('/:chain/query/nominationPools/bondedPools', async (req, res, next) => {
-    try {
-      const chain = req.params.chain
-      const pid = req.query.id || 0
-      const bondedPools = await api[chain].query.nominationPools.bondedPools(pid)
-      res.json({ bondedPools: bondedPools.toJSON() })
-    } catch (err) { next(err) }
-
-  })
-  //           api.query.nominationPools.metadata(pid)
-  app.get('/:chain/query/nominationPools/metadata', async (req, res, next) => {
-    try {
-      const chain = req.params.chain
-      const pid = req.query.id || 0
-      const name = await api[chain].query.nominationPools.metadata(pid)
-      res.json({ metadata: hexToString(name.toString()) })
-    } catch (err) { next(err) }
-  })
-  //           api.query.nominationPools.poolMembers.entries()
-  app.get('/:chain/query/nominationPools/poolMembers', async (req, res, next) => {
-    try {
-      const chain = req.params.chain
-      var entries = await api[chain].query.nominationPools.poolMembers.entries()
-      // console.log('num entries', entries.length)
-      var members = entries.reduce((all, [{ args: [accountId] }, optMember]) => {
-        if (optMember.isSome) {
-          const member = optMember.unwrap();
-          const poolId = member.poolId.toNumber() // toString();
-          if (!all[poolId]) { all[poolId] = []; }
-          all[poolId].push({
-            accountId: accountId.toString(),
-            points: member.points.toNumber()
-            // member
-          });
-          // all[poolId].push(accountId.toString());
-        }
-        return all;
-      }, {})
-      res.json({ poolMambers: members })
-    } catch (err) { next(err) }
-  })
-  //           api.query.nominationPools.rewardPools(pid)
-  app.get('/:chain/query/nominationPools/rewardPools', async (req, res, next) => {
-    try {
-      const chain = req.params.chain
-      const pid = req.query.id || 0
-      const rewardPools = await api[chain].query.nominationPools.rewardPools(pid)
-      res.json({ rewardPools: rewardPools.toJSON() })
-    } catch (err) { next(err) }
-  })
-  //           api.query.nominationPools.subPoolsStorage(pid)
-  app.get('/:chain/query/nominationPools/subPoolsStorage', async (req, res, next) => {
-    try {
-      const chain = req.params.chain
-      const pid = req.query.id || 0
-      const subPoolsStorage = await api[chain].query.nominationPools.subPoolsStorage(pid)
-      res.json({ subPoolsStorage: subPoolsStorage.toJSON() })
-    } catch (err) { next(err) }
+  //           api.query.nominationPools
+  app.get('/:chain/query/nominationPools/:method', async (req, res) => {
+    let { chain, method } = req.params
+    count(chain, `/query/nominationPools/${method}`)
+    let params = req.query
+    let answer = await handlers[chain].nominationPools(method, params)
+    res.json(answer)
   })
 
+  //            api.query.referenda
+  app.get('/:chain/query/referenda/:method', async (req, res) => {
+    let { chain, method } = req.params
+    count(chain, `/query/nominationPools/${method}`)
+    let params = req.query
+    let answer = await handlers[chain].referenda(method, params)
+    res.json(answer)
+  })
 
   //           api.query.session.validators()
   app.get('/:chain/query/session/validators', async (req, res, next) => {
     try {
       const chain = req.params.chain
+      count(chain, '/query/session/validators')
       const keys = await api[chain].query.session.validators()
       // console.log(keys)
       // const ids = keys.map(({ args: [stash] }) => stash.toJSON())
@@ -178,14 +200,25 @@ async function asyncForEach(array, callback) {
   app.get('/:chain/query/staking/activeEra', async (req, res, next) => {
     try {
       const chain = req.params.chain
+      count(chain, '/query/staking/activeEra')
       const activeEra = await api[chain].query.staking.activeEra()
       res.json({ activeEra: activeEra.toJSON() })
+    } catch (err) { next(err) }
+  })
+  //           api.query.staking.currentEra()
+  app.get('/:chain/query/staking/currentEra', async (req, res, next) => {
+    try {
+      const chain = req.params.chain
+      count(chain, '/query/staking/currentEra')
+      const currentEra = await api[chain].query.staking.currentEra()
+      res.json({ currentEra })
     } catch (err) { next(err) }
   })
   //           api.query.staking.erasStakers.entries(activeEra.index)
   app.get('/:chain/query/staking/erasStakers', async (req, res, next) => {
     try {
       const chain = req.params.chain
+      count(chain, '/query/staking/eraStakers')
       const index = req.query.index || 0
       const entries = await api[chain].query.staking.erasStakers.entries(index)
       var list = []
@@ -207,6 +240,7 @@ async function asyncForEach(array, callback) {
   app.get('/:chain/query/staking/nominators', async (req, res, next) => {
     try {
       const chain = req.params.chain
+      count(chain, '/query/staking/nominators')
       const nominators = await api[chain].query.staking.nominators.entries();
       const list = nominators.map(([address]) => ""+address.toHuman()[0]);
       res.json({ nominators: list })
@@ -216,6 +250,7 @@ async function asyncForEach(array, callback) {
   app.get('/:chain/query/staking/validators', async (req, res, next) => {
     try {
       const chain = req.params.chain
+      count(chain, '/query/staking/validators')
       const validators = await api[chain].query.staking.validators.entries();
       // const list = validators.map(([address]) => ""+address.toHuman()[0]);
       res.json({ validators: validators.map(([key, prefs]) => {
@@ -224,6 +259,56 @@ async function asyncForEach(array, callback) {
           prefs: prefs.toJSON()
         }
       } ) })
+    } catch (err) { next(err) }
+  })
+  //           api.query.staking.unappliedSlashes
+  app.get('/:chain/query/staking/unappliedSlashes', async (req, res, next) => {
+    try {
+      const chain = req.params.chain
+      count(chain, '/query/staking/unappliedSlashes')
+      const unappliedSlashes = await api[chain].query.staking.unappliedSlashes.entries();      
+      res.json({
+        unappliedSlashes: unappliedSlashes.map(([era, slashes]) => {
+          return {
+            era: String(era.toHuman()).replace(',', ''),
+            slashes: slashes.toJSON()
+          }
+        }) 
+      })
+    } catch (err) { next(err) }
+  })
+
+  // TODO move this to the apiHandler?
+  //           api.query.system.account
+  app.get('/:chain/query/system/account/:accountId', async(req, res, next) => {
+    const { chain, accountId } = req.params
+    count(chain, '/query/system/account')
+    try {
+      const account = await api[chain].query.system.account(accountId)
+      res.json(account)
+    } catch (err) { next(err) }
+  })
+
+  //           api.query.system.account.multi
+  app.get('/:chain/query/system/accountMulti', async(req, res, next) => {
+    const { chain } = req.params
+    count(chain, '/query/system/accountMulti')
+    try {
+      var ids = req.query.ids || [] // force a single id into array
+      if(!Array.isArray(ids)) ids = [ids]
+      console.debug('ids', ids)
+      const accounts = await api[chain].query.system.account.multi(ids)
+      res.json(accounts)
+    } catch (err) { next(err) }
+  })
+
+  //           api.rpc.system.properties
+  app.get('/:chain/rpc/system/properties', async(req, res, next) => {
+    const chain = req.params.chain
+    count(chain, '/rpc/system/properties')
+    try {
+      const props = await api[chain].rpc.system.properties()
+      res.json(props)
     } catch (err) { next(err) }
   })
 
