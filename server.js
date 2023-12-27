@@ -5,6 +5,10 @@ import { DockAPI } from '@docknetwork/sdk'
 import { parseIdentity } from './utils.js';
 import { ApiHandler } from './lib/ApiHandler.js';
 import express from 'express';
+
+import * as dotenv from 'dotenv'
+dotenv.config()
+
 const port = 3000;
 
 // collect usage stats into prometheus
@@ -13,6 +17,7 @@ var counters = { kusama: {}, polkadot: {}, dock: {} }
 function count(chain, fn) {
   console.debug('count()', chain, fn)
   if (!metrics) return
+  if (!counters[chain]) return
   if (counters[chain][fn]) { counters[chain][fn]++ } else { counters[chain][fn] = 1 }
 }
 // import client from 'prom-client';
@@ -27,11 +32,14 @@ function count(chain, fn) {
 // counter.inc(10); // Increment by 10
 
 const wsUrl = {
-  //polkadot: 'ws://localhost:30325',
-  polkadot: 'wss://rpc.ibp.network/polkadot',
-  kusama: 'ws://localhost:40425',
-  dock: 'wss://mainnet-node.dock.io',
+  polkadot: process.env.POLKADOT_URL || 'ws://localhost:30325',
+  //polkadot: process.env.POLKADOT_URL || 'wss://rpc.ibp.network/polkadot',
+  kusama: process.env.KUSAMA_URL || 'ws://localhost:40425',
+  //kusama: process.env.KUSAMA_URL || 'wss://rpc.ibp.network/kusama',
+  dock: process.env.DOCK_URL || 'wss://mainnet-node.dock.io',
 };
+
+console.log('wsUrl', wsUrl)
 
 async function asyncForEach(array, callback) {
   for (let index = 0; index < array.length; index++) {
@@ -205,6 +213,20 @@ async function asyncForEach(array, callback) {
       res.json({ activeEra: activeEra.toJSON() })
     } catch (err) { next(err) }
   })
+  //           api.query.staking.bonded()
+  // app.get('/:chain/query/staking/bonded/:accountId', async (req, res, next) => {
+  //   const { chain, accountId } = req.params
+  //   count(chain, '/query/staking/bonded')
+  //   try {
+  //     const bondedEntries = await api[chain].query.staking.bonded.entries(accountId)
+  //     var bonded = []
+  //     asyncForEach(entries, ([key, val]) {
+  //       bonded.push({})
+  //     })
+  //     console.debug(bonded.toString())
+  //     res.json(bonded)
+  //   } catch (err) { next(err) }
+  // })
   //           api.query.staking.currentEra()
   app.get('/:chain/query/staking/currentEra', async (req, res, next) => {
     try {
@@ -273,7 +295,7 @@ async function asyncForEach(array, callback) {
             era: String(era.toHuman()).replace(',', ''),
             slashes: slashes.toJSON()
           }
-        }) 
+        })
       })
     } catch (err) { next(err) }
   })
@@ -282,9 +304,16 @@ async function asyncForEach(array, callback) {
   //           api.query.system.account
   app.get('/:chain/query/system/account/:accountId', async(req, res, next) => {
     const { chain, accountId } = req.params
+    const { at } = req.query
     count(chain, '/query/system/account')
+    console.debug(`/${chain}/query/system/account`, accountId, at)
     try {
-      const account = await api[chain].query.system.account(accountId)
+      var apiAt = api[chain]
+      if (at) {
+        const atHash = await api[chain].rpc.chain.getBlockHash(at)
+        apiAt = await api[chain].at(atHash)
+      }
+      const account = await apiAt.query.system.account(accountId)
       res.json(account)
     } catch (err) { next(err) }
   })

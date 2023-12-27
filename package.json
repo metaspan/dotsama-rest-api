@@ -2,10 +2,11 @@
   "name": "dotsama-rest-api",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "server.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
   },
   "author": "",
   "license": "ISC",
@@ -16,6 +17,7 @@
     "@polkadot/types-create": "^9.7.1",
     "@polkadot/types-known": "^9.7.1",
     "@polkadot/util": "^10.4.2",
+    "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "moment-timezone": "^0.5.43",
     "prom-client": "^14.2.0"

@@ -1,0 +1,26 @@
+version: '3'
+
+# docker compose build
+# docker compose up -d
+# env_file: .env
+
+services:
+
+  substrate-rest-api:
+    container_name: substrate-rest-api
+    build:
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    # read variables from .env!
+    environment:
+      # - POLKADOT_URL=wss://rpc.ibp.network/polkadot
+      # - POLKADOT_URL=ws://192.168.1.92:30325
+      POLKADOT_URL: ${POLKADOT_URL}
+      # - KUSAMA_URL=wss://rpc.ibp.network/kusama
+      # - KUSAMA_URL=ws://192.168.1.92:40425
+      KUSAMA_URL: ${KUSAMA_URL}
+      # - DOCK_URL=wss://mainnet-node.dock.io
+      # - DOCK_URL=ws://192.168.1.92:42015
+      DOCK_URL: ${DOCK_URL}
