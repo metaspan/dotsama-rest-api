@@ -16,7 +16,9 @@ docker compose up -d
 git clone https://github.com/metaspan/dotsama-rest-apidotsama-rest-api
 cd dotsama-rest-api
 npm install
-# edit server.js, set PORT and upstream servers
+cp .env.sample .env
+# edit .env as required
+# edit server.js, set PORT
 node server.js
 ```
 
