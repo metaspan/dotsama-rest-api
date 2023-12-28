@@ -1,7 +1,9 @@
 # dotsama-rest-api
 REST wrapper to polkadot.js API
 
+<!--
 # NOTE: This service is running docker on swarm1 / miner2
+-->
 
 ```bash
 docker compose build
